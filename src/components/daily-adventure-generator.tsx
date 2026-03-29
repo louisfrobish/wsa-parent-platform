@@ -1,0 +1,264 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { DailyAdventureResult } from "@/components/adventure-engine/daily-adventure-result";
+import { LocationContextFields } from "@/components/location-context-fields";
+import { MarkCompleteCard } from "@/components/mark-complete-card";
+import { dailyAdventurePresets, type DailyAdventurePresetKey } from "@/lib/daily-adventure-presets";
+import type { DailyAdventureOutput, GenerationRecord } from "@/lib/generations";
+import type { StudentRecord } from "@/lib/students";
+
+type DailyAdventureGeneratorProps = {
+  userId: string;
+  initialHistory: GenerationRecord[];
+  students: StudentRecord[];
+  preselectedStudentId?: string;
+  preselectedPreset?: DailyAdventurePresetKey;
+  initialLocationLabel?: string;
+  initialRadiusMiles?: number;
+  initialWeatherCondition?: string;
+  initialLatitude?: number | null;
+  initialLongitude?: number | null;
+  weatherHelperText?: string;
+};
+
+type DailyAdventureResponse = {
+  generation: GenerationRecord;
+  output: DailyAdventureOutput;
+};
+
+type ViewState = "idle" | "loading" | "result";
+type SelectedTarget =
+  | { targetType: "household"; targetId: string }
+  | { targetType: "student"; targetId: string };
+
+function JournalIcon() {
+  return (
+    <svg aria-hidden="true" className="guide-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M7 4h9a2 2 0 0 1 2 2v14H9a2 2 0 0 0-2 2V4Z" />
+      <path d="M7 4H6a2 2 0 0 0-2 2v14h3" />
+      <path d="M10 8h5" />
+      <path d="M10 12h5" />
+    </svg>
+  );
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function DailyAdventureGenerator({
+  userId,
+  initialHistory: _initialHistory,
+  students,
+  preselectedStudentId,
+  preselectedPreset,
+  initialLocationLabel = "Southern Maryland",
+  initialRadiusMiles = 10,
+  initialWeatherCondition = "clear",
+  initialLatitude,
+  initialLongitude,
+  weatherHelperText = ""
+}: DailyAdventureGeneratorProps) {
+  const [result, setResult] = useState<DailyAdventureOutput | null>(null);
+  const [latestGenerationId, setLatestGenerationId] = useState("");
+  const [selectedTarget, setSelectedTarget] = useState<SelectedTarget>(
+    preselectedStudentId
+      ? { targetType: "student", targetId: preselectedStudentId }
+      : { targetType: "household", targetId: userId }
+  );
+  const [selectedPreset, setSelectedPreset] = useState<DailyAdventurePresetKey | "">(preselectedPreset ?? "");
+  const [locationLabel, setLocationLabel] = useState(initialLocationLabel);
+  const [radiusMiles, setRadiusMiles] = useState(String(initialRadiusMiles));
+  const [weatherCondition, setWeatherCondition] = useState(initialWeatherCondition);
+  const [latitude, setLatitude] = useState<number | undefined>(typeof initialLatitude === "number" ? initialLatitude : undefined);
+  const [longitude, setLongitude] = useState<number | undefined>(typeof initialLongitude === "number" ? initialLongitude : undefined);
+  const [forecastHelperText, setForecastHelperText] = useState(weatherHelperText);
+  const [error, setError] = useState("");
+  const [viewState, setViewState] = useState<ViewState>("idle");
+  const [isWeatherResolving, setIsWeatherResolving] = useState(false);
+
+  useEffect(() => {
+    if (preselectedStudentId) {
+      setSelectedTarget({ targetType: "student", targetId: preselectedStudentId });
+    }
+  }, [preselectedStudentId]);
+
+  useEffect(() => {
+    if (preselectedPreset) {
+      setSelectedPreset(preselectedPreset);
+    }
+  }, [preselectedPreset]);
+
+  const selectedStudent =
+    selectedTarget.targetType === "student"
+      ? students.find((student) => student.id === selectedTarget.targetId) ?? null
+      : null;
+  const canGenerate =
+    !isWeatherResolving &&
+    (selectedTarget.targetType === "household" || selectedStudent !== null || students.length === 0);
+
+  return (
+    <section className="stack daily-adventure-flow">
+      {viewState === "idle" ? (
+        <article className="panel stack adventure-input-panel adventure-input-panel-full print-hide">
+          <div className="planner-header field-section-header">
+            <div className="field-section-heading">
+              <span className="field-guide-icon-disc">
+                <JournalIcon />
+              </span>
+              <div>
+                <p className="eyebrow">Daily Adventure</p>
+                <div className="wood-banner wood-banner-small">Adventure Planner</div>
+                <h3 className="planner-title">Plan today's field-guide mission</h3>
+                <p className="panel-copy">
+                  Build one calm, practical outdoor homeschool mission with a clear observation target, conversation prompt, and family-friendly challenge.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {students.length ? (
+            <label>
+              Student
+              <select
+                value={selectedTarget.targetType === "household" ? "household" : selectedTarget.targetId}
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  if (nextValue === "household") {
+                    setSelectedTarget({ targetType: "household", targetId: userId });
+                    return;
+                  }
+
+                  setSelectedTarget({ targetType: "student", targetId: nextValue });
+                }}
+              >
+                <option value="household">Household</option>
+                {students.map((student) => (
+                  <option key={student.id} value={student.id}>
+                    {student.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <p className="panel-copy">Add a student profile to connect adventures to a specific child from the dashboard.</p>
+          )}
+
+          <label>
+            Quick-start preset
+            <select value={selectedPreset} onChange={(event) => setSelectedPreset(event.target.value as DailyAdventurePresetKey | "")}>
+              <option value="">Balanced daily adventure</option>
+              {Object.values(dailyAdventurePresets).map((preset) => (
+                <option key={preset.key} value={preset.key}>
+                  {preset.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <LocationContextFields
+            locationLabel={locationLabel}
+            radiusMiles={radiusMiles}
+            weatherCondition={weatherCondition}
+            weatherHelperText={forecastHelperText}
+            onLocationLabelChange={(value) => setLocationLabel(value)}
+            onRadiusMilesChange={(value) => setRadiusMiles(value)}
+            onWeatherConditionChange={(value) => setWeatherCondition(value)}
+            onCoordinatesResolved={({ latitude: nextLat, longitude: nextLng, locationLabel: nextLabel }) => {
+              setLatitude(nextLat);
+              setLongitude(nextLng);
+              setLocationLabel(nextLabel);
+              setIsWeatherResolving(true);
+              void (async () => {
+                try {
+                  const response = await fetch(`/api/planner-weather?latitude=${nextLat}&longitude=${nextLng}`);
+                  const payload = (await response.json()) as { weatherCondition?: string };
+                  if (response.ok && payload.weatherCondition) {
+                    setWeatherCondition(payload.weatherCondition);
+                    setForecastHelperText("Auto-filled from today's forecast");
+                  }
+                } finally {
+                  setIsWeatherResolving(false);
+                }
+              })();
+            }}
+          />
+
+          <button
+            type="button"
+            disabled={!canGenerate}
+            onClick={() => {
+              setError("");
+              setViewState("loading");
+
+              void (async () => {
+                const [response] = await Promise.all([
+                  fetch("/api/generate-daily-adventure", {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                      requestDate: new Date().toISOString().slice(0, 10),
+                      targetType: selectedTarget.targetType,
+                      targetId: selectedTarget.targetId,
+                      householdMode: selectedTarget.targetType === "household",
+                      studentId: selectedTarget.targetType === "student" ? selectedStudent?.id : undefined,
+                      studentName: selectedTarget.targetType === "student" ? selectedStudent?.name : undefined,
+                      preset: selectedPreset || undefined,
+                      locationLabel,
+                      radiusMiles: Number(radiusMiles),
+                      weatherCondition,
+                      latitude,
+                      longitude
+                    })
+                  }),
+                  wait(700)
+                ]);
+
+                const payload = (await response.json()) as DailyAdventureResponse | { error: string };
+
+                if (!response.ok || "error" in payload) {
+                  setError("error" in payload ? payload.error : "Daily adventure generation failed.");
+                  setViewState("idle");
+                  return;
+                }
+
+                setResult(payload.output);
+                setLatestGenerationId(payload.generation.id);
+                setViewState("result");
+              })();
+            }}
+          >
+            Generate daily adventure
+          </button>
+
+          {error ? <p className="error">{error}</p> : null}
+        </article>
+      ) : null}
+
+      {viewState === "loading" ? (
+        <article className="panel stack adventure-transition-card adventure-stage-panel print-hide">
+          <div className="adventure-awaits">
+            <p className="eyebrow">Field Guide Loading</p>
+            <h3>Adventure awaits</h3>
+            <p className="panel-copy">Charting today's trail, weather, and mission details for your next outing.</p>
+          </div>
+        </article>
+      ) : null}
+
+      {viewState === "result" && result ? (
+        <div className="stack adventure-stage-panel">
+          <DailyAdventureResult result={result} generationId={latestGenerationId || undefined} />
+          {latestGenerationId ? (
+            <MarkCompleteCard
+              studentId={selectedTarget.targetType === "student" ? selectedTarget.targetId : null}
+              generationId={latestGenerationId}
+            />
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}

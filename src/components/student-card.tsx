@@ -1,0 +1,55 @@
+import Link from "next/link";
+import type { StudentRecord } from "@/lib/students";
+
+type StudentCardProps = {
+  student: StudentRecord;
+  badgeCount?: number;
+};
+
+function getRankClassName(rank: string) {
+  switch (rank.toLowerCase()) {
+    case "bronco":
+      return "rank-bronco";
+    case "mustang":
+      return "rank-mustang";
+    case "stallion":
+      return "rank-stallion";
+    default:
+      return "rank-colt";
+  }
+}
+
+export function StudentCard({ student, badgeCount = 0 }: StudentCardProps) {
+  return (
+    <article className="panel stack specimen-card">
+      <div className="header-row">
+        <div>
+          <p className="eyebrow">Student</p>
+          <h3>{student.name}</h3>
+        </div>
+        <span className="rank-pill">
+          <span className={`rank-emblem rank-emblem-small ${getRankClassName(student.current_rank)}`} aria-hidden="true" />
+          {student.current_rank}
+        </span>
+      </div>
+      <p className="panel-copy" style={{ margin: 0 }}>
+        Age {student.age} | {student.completed_adventures_count} completed adventures
+      </p>
+      <p className="panel-copy" style={{ margin: 0 }}>
+        Interests: {student.interests.length ? student.interests.join(", ") : "Still exploring"}
+      </p>
+      <div className="chip-list">
+        <li>{student.current_rank}</li>
+        <li>{badgeCount} badge{badgeCount === 1 ? "" : "s"}</li>
+      </div>
+      <div className="cta-row">
+        <Link className="button button-ghost" href={`/students/${student.id}`}>
+          View profile
+        </Link>
+        <Link className="button button-primary" href={`/daily-adventure?studentId=${student.id}`}>
+          Start today&apos;s adventure
+        </Link>
+      </div>
+    </article>
+  );
+}

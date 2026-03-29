@@ -1,0 +1,79 @@
+import Link from "next/link";
+import type { ClassRecord } from "@/lib/classes";
+
+type ClassesListProps = {
+  classes: ClassRecord[];
+};
+
+function formatPrice(priceCents: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD"
+  }).format(priceCents / 100);
+}
+
+export function ClassesList({ classes }: ClassesListProps) {
+  if (!classes.length) {
+    return (
+      <section className="panel stack">
+        <div>
+          <p className="eyebrow">Classes</p>
+          <h3>No classes published yet</h3>
+          <p className="panel-copy">This page is now backed by the database and ready for real class publishing and booking flows.</p>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="content-grid">
+      {classes.map((item) => (
+        <article className="panel stack" key={item.id}>
+          <div className="header-row">
+            <div>
+              <p className="eyebrow">{item.class_type}</p>
+              <h3>{item.title}</h3>
+            </div>
+            <span className="pill">{item.status}</span>
+          </div>
+          <p className="panel-copy" style={{ margin: 0 }}>
+            {item.description || "Outdoor class details coming soon."}
+          </p>
+          <div className="chip-list">
+            <li>{new Date(item.date).toLocaleDateString()}</li>
+            <li>{item.start_time} - {item.end_time}</li>
+            <li>{item.location || "Location TBD"}</li>
+            <li>{formatPrice(item.price_cents)}</li>
+          </div>
+          <div className="result-sections">
+            <section>
+              <h4>Age range</h4>
+              <p>
+                {item.age_min ?? "?"} - {item.age_max ?? "?"}
+              </p>
+            </section>
+            <section>
+              <h4>Spots remaining</h4>
+              <p>
+                {item.spots_remaining} of {item.max_capacity}
+              </p>
+            </section>
+            <section>
+              <h4>What to bring</h4>
+              <p>{item.what_to_bring || "Bring water, weather-appropriate layers, and curiosity."}</p>
+            </section>
+            <section>
+              <h4>Weather note</h4>
+              <p>{item.weather_note || "Final weather guidance will be shared before class."}</p>
+            </section>
+          </div>
+          <div className="cta-row">
+            <Link className="button button-primary" href={`/classes/${item.id}`}>
+              View class
+            </Link>
+          </div>
+        </article>
+      ))}
+    </section>
+  );
+}

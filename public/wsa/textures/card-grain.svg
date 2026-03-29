@@ -1,0 +1,10 @@
+<svg width="240" height="240" viewBox="0 0 240 240" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="240" height="240" fill="#F8F0DE"/>
+  <g opacity="0.15" stroke="#9B7A55" stroke-width="1">
+    <path d="M18 26C64 30 96 18 142 26C176 32 204 30 222 22"/>
+    <path d="M20 74C54 82 92 64 132 72C170 80 198 78 224 68"/>
+    <path d="M18 118C62 122 102 108 144 118C176 126 202 124 224 116"/>
+    <path d="M24 168C62 174 96 158 136 164C174 170 198 170 222 160"/>
+    <path d="M18 214C60 218 98 206 138 210C176 214 202 214 224 206"/>
+  </g>
+</svg>
