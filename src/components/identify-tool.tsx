@@ -13,6 +13,7 @@ import {
 } from "@/lib/identify";
 import { harvestAllowedForStatus } from "@/lib/regulations/types";
 import { deriveDiscoverySafetyStatus } from "@/lib/safety-status/derive";
+import { prepareImageUpload } from "@/lib/image-upload";
 import type { StudentRecord } from "@/lib/students";
 
 type IdentifyToolProps = {
@@ -173,12 +174,29 @@ export function IdentifyTool({ students, preselectedStudentId }: IdentifyToolPro
             type="file"
             accept="image/*"
             capture="environment"
-            onChange={(event) => {
+            onChange={async (event) => {
               const nextFile = event.target.files?.[0] ?? null;
-              setFile(nextFile);
               setResult(null);
-              setError("");
               setSaveMessage("");
+              setError("");
+
+              if (!nextFile) {
+                setFile(null);
+                return;
+              }
+
+              const prepared = await prepareImageUpload(nextFile);
+              if (!prepared.file) {
+                setFile(null);
+                setError(prepared.message || "Could not use that image.");
+                event.currentTarget.value = "";
+                return;
+              }
+
+              setFile(prepared.file);
+              if (prepared.message) {
+                setError(prepared.message);
+              }
             }}
           />
         </label>

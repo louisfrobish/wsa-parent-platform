@@ -12,6 +12,7 @@ import {
   identifyResponseJsonSchema,
   identifyResponseSchema
 } from "@/lib/identify";
+import { getImageUploadError } from "@/lib/image-upload";
 import { createClient } from "@/lib/supabase/server";
 
 export async function POST(request: Request) {
@@ -36,6 +37,11 @@ export async function POST(request: Request) {
 
     if (!(image instanceof File) || image.size === 0) {
       return NextResponse.json({ error: "An image is required." }, { status: 400 });
+    }
+
+    const uploadError = getImageUploadError(image);
+    if (uploadError) {
+      return NextResponse.json({ error: uploadError }, { status: 400 });
     }
 
     const category = discoverCategorySchema.parse(

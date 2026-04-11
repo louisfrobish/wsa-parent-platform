@@ -7,6 +7,7 @@ import { MarkCompleteCard } from "@/components/mark-complete-card";
 import type { ActivityCompletionRecord } from "@/lib/activity-completions";
 import type { StudentAchievementRecord, StudentBadgeRecord } from "@/lib/badges";
 import type { ClassBookingRecord, ClassRecord } from "@/lib/classes";
+import { getDiscoveryCategoryLabel, type DiscoveryRecord } from "@/lib/discoveries";
 import { generationKindLabel, type GenerationRecord } from "@/lib/generations";
 import { getRankDescription, getRankProgress, type StudentRecord } from "@/lib/students";
 
@@ -15,6 +16,7 @@ type StudentProfileViewProps = {
   completedAdventures: GenerationRecord[];
   linkedGenerations: GenerationRecord[];
   recentCompletions: ActivityCompletionRecord[];
+  recentDiscoveries: DiscoveryRecord[];
   classBookings: Array<ClassBookingRecord & { classes?: ClassRecord | null }>;
   badges: StudentBadgeRecord[];
   achievements: StudentAchievementRecord[];
@@ -84,6 +86,7 @@ export function StudentProfileView({
   completedAdventures,
   linkedGenerations,
   recentCompletions,
+  recentDiscoveries,
   classBookings,
   badges,
   achievements
@@ -282,6 +285,49 @@ export function StudentProfileView({
             Add a discovery
           </Link>
         </div>
+        {recentDiscoveries.length ? (
+          <div className="content-grid">
+            {recentDiscoveries.map((discovery) => (
+              <article className="specimen-card" key={discovery.id}>
+                <img
+                  src={discovery.image_url}
+                  alt={discovery.image_alt ?? discovery.common_name}
+                  className="field-guide-image"
+                />
+                <div className="field-guide-copy stack">
+                  <div className="field-guide-meta-row">
+                    <span className="badge">{getDiscoveryCategoryLabel(discovery.category)}</span>
+                    <span className="muted">{new Date(discovery.observed_at).toLocaleDateString()}</span>
+                  </div>
+                  <h4 style={{ margin: 0 }}>{discovery.common_name}</h4>
+                  {discovery.scientific_name ? (
+                    <p className="muted" style={{ margin: 0 }}>
+                      {discovery.scientific_name}
+                    </p>
+                  ) : null}
+                  <div className="chip-list discovery-card-meta">
+                    <li>{discovery.student_id ? "Saved for this student" : "Household discovery"}</li>
+                    <li>{discovery.confidence_level}</li>
+                  </div>
+                  <div className="cta-row">
+                    <Link className="button button-ghost" href={`/discover/catalog/${discovery.id}`}>
+                      Open
+                    </Link>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="field-empty-state">
+            <div className="copy">
+              <h4>No discoveries saved here yet</h4>
+              <p className="panel-copy" style={{ marginBottom: 0 }}>
+                Household saves and discoveries linked to this student will appear here once the family starts logging finds.
+              </p>
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="panel stack" id="student-classes">

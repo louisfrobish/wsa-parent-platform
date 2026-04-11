@@ -9,6 +9,7 @@ import type { DiscoverCategory, IdentifyResponse } from "@/lib/identify";
 import { discoverCategoryOptions } from "@/lib/identify";
 import { harvestAllowedForStatus } from "@/lib/regulations/types";
 import { deriveDiscoverySafetyStatus } from "@/lib/safety-status/derive";
+import { prepareImageUpload } from "@/lib/image-upload";
 import { createClient } from "@/lib/supabase/client";
 
 type QuickDiscoverCameraProps = {
@@ -332,15 +333,21 @@ export function QuickDiscoverCamera({ isOpen, onClose }: QuickDiscoverCameraProp
               accept="image/*"
               capture="environment"
               className="print-hide"
-              onChange={(event) => {
+              onChange={async (event) => {
                 const nextFile = event.target.files?.[0] ?? null;
                 if (!nextFile) return;
+                const prepared = await prepareImageUpload(nextFile);
+                if (!prepared.file) {
+                  setActionError(prepared.message || "Could not use that image.");
+                  event.currentTarget.value = "";
+                  return;
+                }
                 stopCamera();
                 setCapturedCategory(category);
-                setCapturedFile(nextFile);
+                setCapturedFile(prepared.file);
                 setResult(null);
                 setSaveMessage("");
-                setActionError("");
+                setActionError(prepared.message || "");
               }}
             />
 

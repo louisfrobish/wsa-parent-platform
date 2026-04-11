@@ -5,6 +5,7 @@ import { z } from "zod";
 import { createServerClient } from "@supabase/ssr";
 import type { CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { getImageUploadError } from "@/lib/image-upload";
 
 const formSchema = z.object({
   leafShape: z.string().min(1),
@@ -58,15 +59,20 @@ export async function POST(request: Request) {
     let photoDataUrl = "";
 
     if (leafPhoto instanceof File && leafPhoto.size > 0) {
+      const validationError = getImageUploadError(leafPhoto);
+      if (validationError) {
+        return NextResponse.json({ error: validationError }, { status: 400 });
+      }
+
       const bytes = Buffer.from(await leafPhoto.arrayBuffer());
       uploadedPath = `${user.id}/${Date.now()}-${leafPhoto.name}`;
-      const { error: uploadError } = await supabase.storage.from("leaf-photos").upload(uploadedPath, bytes, {
+      const { error: storageUploadError } = await supabase.storage.from("leaf-photos").upload(uploadedPath, bytes, {
         contentType: leafPhoto.type,
         upsert: false
       });
 
-      if (uploadError) {
-        return NextResponse.json({ error: uploadError.message }, { status: 500 });
+      if (storageUploadError) {
+        return NextResponse.json({ error: storageUploadError.message }, { status: 500 });
       }
 
       photoDataUrl = `data:${leafPhoto.type};base64,${bytes.toString("base64")}`;

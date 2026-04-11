@@ -9,7 +9,9 @@ import {
   type StudentAchievementRecord,
   type StudentBadgeRecord
 } from "@/lib/badges";
+import type { DiscoveryRecord } from "@/lib/discoveries";
 import type { GenerationRecord } from "@/lib/generations";
+import { createSignedStorageUrl, extractStoragePathFromLegacyUrl } from "@/lib/storage";
 import type { ClassBookingRecord, ClassRecord } from "@/lib/classes";
 import type { StudentRecord } from "@/lib/students";
 
@@ -60,7 +62,7 @@ export default async function StudentProfilePage({ params }: { params: Promise<{
 
   linkedGenerations = (linkedGenerationRows ?? []) as GenerationRecord[];
 
-  const [{ data: badges }, { data: achievements }, { data: bookings }] = await Promise.all([
+  const [{ data: badges }, { data: achievements }, { data: bookings }, { data: discoveries }] = await Promise.all([
     supabase
       .from("student_badges")
       .select("id, student_id, badge_id, earned_at, source_completion_id, created_at, badges:badges(id, name, description, category, icon, criteria_json, created_at)")
@@ -77,8 +79,28 @@ export default async function StudentProfilePage({ params }: { params: Promise<{
       .select("id, class_id, user_id, student_id, booking_status, payment_status, stripe_checkout_session_id, stripe_payment_intent_id, amount_paid_cents, booked_at, notes, created_at, updated_at, classes:classes(id, title, description, class_type, date, start_time, end_time, location, age_min, age_max, price_cents, max_capacity, spots_remaining, what_to_bring, weather_note, waiver_required, status, created_at, updated_at)")
       .eq("user_id", user.id)
       .eq("student_id", id)
-      .order("booked_at", { ascending: false })
+      .order("booked_at", { ascending: false }),
+    supabase
+      .from("discoveries")
+      .select("id, user_id, student_id, category, image_path, common_name, scientific_name, confidence_level, image_url, image_alt, notes, result_json, location_label, latitude, longitude, observed_at, created_at")
+      .eq("user_id", user.id)
+      .or(`student_id.eq.${id},student_id.is.null`)
+      .order("observed_at", { ascending: false })
+      .limit(6)
   ]);
+
+  const recentDiscoveries = await Promise.all(
+    ((discoveries ?? []) as DiscoveryRecord[]).map(async (item) => {
+      const imagePath = item.image_path ?? extractStoragePathFromLegacyUrl(item.image_url, "leaf-photos");
+      const signedImageUrl = await createSignedStorageUrl(supabase, "leaf-photos", imagePath);
+
+      return {
+        ...item,
+        image_path: imagePath,
+        image_url: signedImageUrl ?? item.image_url
+      } satisfies DiscoveryRecord;
+    })
+  );
 
   return (
     <PageShell
@@ -92,6 +114,7 @@ export default async function StudentProfilePage({ params }: { params: Promise<{
         completedAdventures={completedAdventures}
         linkedGenerations={linkedGenerations}
         recentCompletions={completionRows}
+        recentDiscoveries={recentDiscoveries}
         classBookings={((bookings ?? []) as Array<ClassBookingRecord & { classes?: ClassRecord | ClassRecord[] | null }>).map((item) => ({
           ...item,
           classes: Array.isArray(item.classes) ? item.classes[0] : item.classes

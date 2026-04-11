@@ -9,9 +9,7 @@ export async function createSignedStorageUrl(
   if (!path) return null;
 
   const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, expiresIn);
-  if (error) {
-    throw new Error(error.message);
-  }
+  if (error) return null;
 
   return data.signedUrl;
 }

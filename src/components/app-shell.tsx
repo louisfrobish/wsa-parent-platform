@@ -65,7 +65,7 @@ export function AppShell({ userLabel, children }: AppShellProps) {
     };
   }, []);
 
-  const selectedStudentId = searchParams.get("student");
+  const selectedStudentId = searchParams.get("student") ?? searchParams.get("studentId");
   const selectedAudience = searchParams.get("audience");
   const activeProfileLabel =
     selectedAudience === "household"

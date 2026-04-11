@@ -25,13 +25,12 @@ export async function saveGeneration({
     .insert({
       user_id: userId,
       student_id: studentId ?? null,
-      kind: toolType,
       tool_type: toolType,
       title,
       input_json: inputJson,
       output_json: outputJson
     })
-    .select("id, user_id, student_id, kind, tool_type, title, input_json, output_json, created_at")
+    .select("id, user_id, student_id, tool_type, title, input_json, output_json, created_at")
     .single();
 
   if (error) {
