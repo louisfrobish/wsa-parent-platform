@@ -79,6 +79,7 @@ type CompletionResult = {
   newAchievements: AchievementRecord[];
   recentBadge: BadgeRecord | null;
   rankJustReached: string | null;
+  alreadyExisted: boolean;
 };
 
 type CompleteDiscoveryInput = {
@@ -87,7 +88,31 @@ type CompleteDiscoveryInput = {
   studentId: string;
   title: string;
   notes?: string;
+  sourceDiscoveryId?: string;
 };
+
+type CompletionLookupRecord = Pick<
+  ActivityCompletionRecord,
+  "id" | "user_id" | "student_id" | "generation_id" | "class_booking_id" | "activity_type" | "title" | "completed_at" | "notes" | "parent_rating" | "created_at"
+>;
+
+async function loadExistingDiscoveryCompletion(
+  supabase: SupabaseClient,
+  userId: string,
+  studentId: string,
+  sourceDiscoveryId: string
+) {
+  const { data, error } = await supabase
+    .from("activity_completions")
+    .select("id, user_id, student_id, generation_id, class_booking_id, activity_type, title, completed_at, notes, parent_rating, created_at")
+    .eq("user_id", userId)
+    .eq("student_id", studentId)
+    .eq("source_discovery_id", sourceDiscoveryId)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  return (data as CompletionLookupRecord | null) ?? null;
+}
 
 export async function loadStudentForCompletion(supabase: SupabaseClient, userId: string, studentId: string) {
   const { data: student, error } = await supabase
@@ -278,7 +303,8 @@ export async function completeActivity({
     newBadges: rewardSummary.newBadges,
     newAchievements: rewardSummary.newAchievements,
     recentBadge: rewardSummary.recentBadge,
-    rankJustReached: previousRank !== rewardSummary.updatedStudent.current_rank ? rewardSummary.updatedStudent.current_rank : null
+    rankJustReached: previousRank !== rewardSummary.updatedStudent.current_rank ? rewardSummary.updatedStudent.current_rank : null,
+    alreadyExisted: false
   };
 }
 
@@ -287,10 +313,26 @@ export async function completeDiscovery({
   userId,
   studentId,
   title,
-  notes
+  notes,
+  sourceDiscoveryId
 }: CompleteDiscoveryInput): Promise<CompletionResult> {
   const student = await loadStudentForCompletion(supabase, userId, studentId);
   const previousRank = student.current_rank;
+
+  if (sourceDiscoveryId) {
+    const existingCompletion = await loadExistingDiscoveryCompletion(supabase, userId, studentId, sourceDiscoveryId);
+    if (existingCompletion) {
+      return {
+        completion: existingCompletion as ActivityCompletionRecord,
+        updatedStudent: student,
+        newBadges: [],
+        newAchievements: [],
+        recentBadge: null,
+        rankJustReached: null,
+        alreadyExisted: true
+      };
+    }
+  }
 
   const { data: inserted, error: insertError } = await supabase
     .from("activity_completions")
@@ -299,6 +341,7 @@ export async function completeDiscovery({
       student_id: studentId,
       generation_id: null,
       class_booking_id: null,
+      source_discovery_id: sourceDiscoveryId ?? null,
       activity_type: "nature_discovery",
       title,
       notes: notes?.trim() ? notes.trim() : null,
@@ -308,6 +351,22 @@ export async function completeDiscovery({
     .single();
 
   if (insertError) {
+    const lower = insertError.message.toLowerCase();
+    if (sourceDiscoveryId && (lower.includes("duplicate") || lower.includes("unique"))) {
+      const existingCompletion = await loadExistingDiscoveryCompletion(supabase, userId, studentId, sourceDiscoveryId);
+      if (existingCompletion) {
+        return {
+          completion: existingCompletion as ActivityCompletionRecord,
+          updatedStudent: student,
+          newBadges: [],
+          newAchievements: [],
+          recentBadge: null,
+          rankJustReached: null,
+          alreadyExisted: true
+        };
+      }
+    }
+
     throw new Error(insertError.message);
   }
 
@@ -324,6 +383,7 @@ export async function completeDiscovery({
     newBadges: rewardSummary.newBadges,
     newAchievements: rewardSummary.newAchievements,
     recentBadge: rewardSummary.recentBadge,
-    rankJustReached: previousRank !== rewardSummary.updatedStudent.current_rank ? rewardSummary.updatedStudent.current_rank : null
+    rankJustReached: previousRank !== rewardSummary.updatedStudent.current_rank ? rewardSummary.updatedStudent.current_rank : null,
+    alreadyExisted: false
   };
 }

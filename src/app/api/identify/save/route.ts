@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { completeDiscovery } from "@/lib/activity-completions";
@@ -17,6 +18,76 @@ const saveIdentifySchema = z.object({
   longitude: z.number().min(-180).max(180).optional(),
   observedAt: z.string().optional()
 });
+
+type SavedDiscoveryRecord = {
+  id: string;
+  user_id: string;
+  student_id: string | null;
+  category: string;
+  common_name: string;
+  scientific_name: string | null;
+  confidence_level: "low" | "medium" | "high";
+  image_url: string;
+  image_alt: string | null;
+  notes: string | null;
+  result_json: Record<string, unknown>;
+  location_label: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  observed_at: string;
+  created_at: string;
+};
+
+function normalizeFingerprintText(value: string | null | undefined) {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function buildDiscoveryRequestFingerprint(input: {
+  imageBytes: Buffer;
+  studentId?: string;
+  selectedCategory: string;
+  catalogCategory: string;
+  possibleIdentification: string;
+  scientificName: string;
+  confidenceLevel: string;
+  notes?: string;
+  locationLabel?: string;
+  latitude?: number;
+  longitude?: number;
+}) {
+  const imageHash = createHash("sha256").update(input.imageBytes).digest("hex");
+  const fingerprintPayload = JSON.stringify({
+    imageHash,
+    studentId: input.studentId ?? "",
+    selectedCategory: normalizeFingerprintText(input.selectedCategory),
+    catalogCategory: normalizeFingerprintText(input.catalogCategory),
+    possibleIdentification: normalizeFingerprintText(input.possibleIdentification),
+    scientificName: normalizeFingerprintText(input.scientificName),
+    confidenceLevel: normalizeFingerprintText(input.confidenceLevel),
+    notes: normalizeFingerprintText(input.notes),
+    locationLabel: normalizeFingerprintText(input.locationLabel),
+    latitude: typeof input.latitude === "number" ? input.latitude : null,
+    longitude: typeof input.longitude === "number" ? input.longitude : null
+  });
+
+  return createHash("sha256").update(fingerprintPayload).digest("hex");
+}
+
+function getDiscoverySelect() {
+  return "id, user_id, student_id, category, common_name, scientific_name, confidence_level, image_url, image_alt, notes, result_json, location_label, latitude, longitude, observed_at, created_at";
+}
+
+async function loadDiscoveryByFingerprint(supabase: Awaited<ReturnType<typeof createClient>>, userId: string, requestFingerprint: string) {
+  const { data, error } = await supabase
+    .from("discoveries")
+    .select(getDiscoverySelect())
+    .eq("user_id", userId)
+    .eq("request_fingerprint", requestFingerprint)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  return (data as SavedDiscoveryRecord | null) ?? null;
+}
 
 export async function POST(request: Request) {
   let uploadedFilePath: string | null = null;
@@ -72,19 +143,6 @@ export async function POST(request: Request) {
     }
 
     const bytes = Buffer.from(await image.arrayBuffer());
-    const filePath = `${user.id}/discoveries/${Date.now()}-${image.name}`;
-    uploadedFilePath = filePath;
-
-    const { error: uploadError } = await supabase.storage.from("leaf-photos").upload(filePath, bytes, {
-      contentType: image.type,
-      upsert: false
-    });
-
-    if (uploadError) {
-      throw new Error(uploadError.message);
-    }
-
-    const imageUrl = supabase.storage.from("leaf-photos").getPublicUrl(filePath).data.publicUrl;
     const catalogCategory = mapDiscoverModeToCatalogCategory(parsed.data.result?.category || parsed.data.selectedCategory || "animal");
     const savedAt = parsed.data.observedAt ?? new Date().toISOString();
     const locationMeta = getDiscoveryLocationMeta({
@@ -125,97 +183,200 @@ export async function POST(request: Request) {
             safety_note: buildMushroomSafetyNote(baseResult.safety_note)
           }
         : baseResult;
+    const requestFingerprint = buildDiscoveryRequestFingerprint({
+      imageBytes: bytes,
+      studentId: parsed.data.studentId,
+      selectedCategory: parsed.data.selectedCategory,
+      catalogCategory,
+      possibleIdentification: result.possible_identification,
+      scientificName: result.scientific_name,
+      confidenceLevel: result.confidence_level,
+      notes: parsed.data.notes,
+      locationLabel: locationMeta.locationLabel ?? undefined,
+      latitude: parsed.data.latitude,
+      longitude: parsed.data.longitude
+    });
 
-    const { data: discovery, error: discoveryError } = await supabase
-      .from("discoveries")
-      .insert({
-        user_id: user.id,
-        student_id: parsed.data.studentId ?? null,
-        category: catalogCategory,
-        common_name: result.possible_identification,
-        scientific_name: result.scientific_name || null,
-        confidence_level: result.confidence_level,
-        image_url: imageUrl,
-        image_alt: `${result.possible_identification} discovery photo`,
-        notes: parsed.data.notes?.trim() || null,
-        result_json: result,
-        location_label: locationMeta.locationLabel,
-        latitude: parsed.data.latitude ?? null,
-        longitude: parsed.data.longitude ?? null,
-        observed_at: savedAt
-      })
-      .select("id, user_id, student_id, category, common_name, scientific_name, confidence_level, image_url, image_alt, notes, result_json, location_label, latitude, longitude, observed_at, created_at")
-      .single();
+    let discovery = await loadDiscoveryByFingerprint(supabase, user.id, requestFingerprint);
+    let imageUrl = discovery?.image_url ?? "";
 
-    if (discoveryError) {
-      throw new Error(discoveryError.message);
+    if (!discovery) {
+      const filePath = `${user.id}/discoveries/${requestFingerprint}-${image.name}`;
+      uploadedFilePath = filePath;
+
+      const { error: uploadError } = await supabase.storage.from("leaf-photos").upload(filePath, bytes, {
+        contentType: image.type,
+        upsert: false
+      });
+
+      if (uploadError && !uploadError.message.toLowerCase().includes("already exists")) {
+        throw new Error(uploadError.message);
+      }
+
+      imageUrl = supabase.storage.from("leaf-photos").getPublicUrl(filePath).data.publicUrl;
+
+      const { data: insertedDiscovery, error: discoveryError } = await supabase
+        .from("discoveries")
+        .insert({
+          user_id: user.id,
+          student_id: parsed.data.studentId ?? null,
+          request_fingerprint: requestFingerprint,
+          category: catalogCategory,
+          common_name: result.possible_identification,
+          scientific_name: result.scientific_name || null,
+          confidence_level: result.confidence_level,
+          image_url: imageUrl,
+          image_alt: `${result.possible_identification} discovery photo`,
+          notes: parsed.data.notes?.trim() || null,
+          result_json: result,
+          location_label: locationMeta.locationLabel,
+          latitude: parsed.data.latitude ?? null,
+          longitude: parsed.data.longitude ?? null,
+          observed_at: savedAt
+        })
+        .select(getDiscoverySelect())
+        .single();
+
+      if (discoveryError) {
+        const lower = discoveryError.message.toLowerCase();
+        if (lower.includes("duplicate") || lower.includes("unique")) {
+          discovery = await loadDiscoveryByFingerprint(supabase, user.id, requestFingerprint);
+          if (!discovery) {
+            throw new Error(discoveryError.message);
+          }
+        } else {
+          throw new Error(discoveryError.message);
+        }
+      } else {
+        discovery = insertedDiscovery as unknown as SavedDiscoveryRecord;
+        createdDiscoveryId = discovery.id;
+      }
+
+      if (createdDiscoveryId === null && uploadedFilePath) {
+        await supabase.storage.from("leaf-photos").remove([uploadedFilePath]);
+        uploadedFilePath = null;
+      }
     }
 
-    createdDiscoveryId = discovery.id;
+    if (!discovery) {
+      throw new Error("Discovery could not be saved.");
+    }
 
     let completionResult: Awaited<ReturnType<typeof completeDiscovery>> | null = null;
     let entry: { id: string } | null = null;
 
     if (parsed.data.studentId) {
-      const { data: portfolioEntry, error: portfolioError } = await supabase
-        .from("portfolio_entries")
-        .insert({
-          student_id: parsed.data.studentId,
-          completion_id: null,
-          title: `${result.possible_identification} discovery`,
-          entry_type: "field_identification",
-          summary: `${result.possible_identification}. ${result.wsa_observation_challenge}`,
-          artifact_json: {
-            source: "discover",
-            discoveryId: discovery.id,
-            selectedCategory: parsed.data.selectedCategory,
-            catalogCategory,
-            imageUrl,
-            identification: result.possible_identification,
-            scientificName: result.scientific_name || null,
-            savedAt,
-            location: {
-              label: locationMeta.locationLabel,
-              regionLabel: locationMeta.regionLabel,
-              latitude: parsed.data.latitude ?? null,
-              longitude: parsed.data.longitude ?? null
-            },
-            result
-          }
-        })
-        .select("id")
-        .single();
-
-      if (portfolioError) {
-        throw new Error(portfolioError.message);
-      }
-
-      createdPortfolioEntryId = portfolioEntry.id;
-
       completionResult = await completeDiscovery({
         supabase,
         userId: user.id,
         studentId: parsed.data.studentId,
         title: `${result.possible_identification} discovery`,
-        notes: `Discovery category: ${catalogCategory}`
+        notes: `Discovery category: ${catalogCategory}`,
+        sourceDiscoveryId: discovery.id
       });
 
-      createdCompletionId = completionResult.completion.id;
-      rollbackStudentId = parsed.data.studentId;
-      rollbackUserId = user.id;
-      rollbackNewBadgeIds = completionResult.newBadges.map((badge) => badge.id);
-      rollbackNewAchievementIds = completionResult.newAchievements.map((achievement) => achievement.id);
+      const existingCompletion = await supabase
+        .from("activity_completions")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("student_id", parsed.data.studentId)
+        .eq("source_discovery_id", discovery.id)
+        .maybeSingle();
 
-      const { error: portfolioLinkError } = await supabase
-        .from("portfolio_entries")
-        .update({ completion_id: completionResult.completion.id })
-        .eq("id", portfolioEntry.id);
-
-      if (portfolioLinkError) {
-        throw new Error(portfolioLinkError.message);
+      if (existingCompletion.error) {
+        throw new Error(existingCompletion.error.message);
       }
 
-      entry = portfolioEntry;
+      if (!completionResult.alreadyExisted) {
+        createdCompletionId = completionResult.completion.id;
+        rollbackStudentId = parsed.data.studentId;
+        rollbackUserId = user.id;
+        rollbackNewBadgeIds = completionResult.newBadges.map((badge) => badge.id);
+        rollbackNewAchievementIds = completionResult.newAchievements.map((achievement) => achievement.id);
+      }
+
+      const { data: existingPortfolioEntry, error: existingPortfolioError } = await supabase
+        .from("portfolio_entries")
+        .select("id, completion_id")
+        .eq("student_id", parsed.data.studentId)
+        .eq("source_discovery_id", discovery.id)
+        .maybeSingle();
+
+      if (existingPortfolioError) {
+        throw new Error(existingPortfolioError.message);
+      }
+
+      if (existingPortfolioEntry) {
+        if (!existingPortfolioEntry.completion_id) {
+          const { error: portfolioLinkError } = await supabase
+            .from("portfolio_entries")
+            .update({ completion_id: completionResult.completion.id })
+            .eq("id", existingPortfolioEntry.id);
+
+          if (portfolioLinkError) {
+            throw new Error(portfolioLinkError.message);
+          }
+        }
+
+        entry = { id: existingPortfolioEntry.id };
+      } else {
+        const { data: portfolioEntry, error: portfolioError } = await supabase
+          .from("portfolio_entries")
+          .insert({
+            student_id: parsed.data.studentId,
+            completion_id: completionResult.completion.id,
+            source_discovery_id: discovery.id,
+            title: `${result.possible_identification} discovery`,
+            entry_type: "field_identification",
+            summary: `${result.possible_identification}. ${result.wsa_observation_challenge}`,
+            artifact_json: {
+              source: "discover",
+              discoveryId: discovery.id,
+              selectedCategory: parsed.data.selectedCategory,
+              catalogCategory,
+              imageUrl,
+              identification: result.possible_identification,
+              scientificName: result.scientific_name || null,
+              savedAt,
+              location: {
+                label: locationMeta.locationLabel,
+                regionLabel: locationMeta.regionLabel,
+                latitude: parsed.data.latitude ?? null,
+                longitude: parsed.data.longitude ?? null
+              },
+              result
+            }
+          })
+          .select("id")
+          .single();
+
+        if (portfolioError) {
+          const lower = portfolioError.message.toLowerCase();
+          if (lower.includes("duplicate") || lower.includes("unique")) {
+            const { data: duplicatePortfolioEntry, error: duplicatePortfolioError } = await supabase
+              .from("portfolio_entries")
+              .select("id")
+              .eq("student_id", parsed.data.studentId)
+              .eq("source_discovery_id", discovery.id)
+              .maybeSingle();
+
+            if (duplicatePortfolioError) {
+              throw new Error(duplicatePortfolioError.message);
+            }
+
+            if (!duplicatePortfolioEntry) {
+              throw new Error(portfolioError.message);
+            }
+
+            entry = { id: duplicatePortfolioEntry.id };
+          } else {
+            throw new Error(portfolioError.message);
+          }
+        } else {
+          createdPortfolioEntryId = portfolioEntry.id;
+          entry = portfolioEntry;
+        }
+      }
     }
 
     return NextResponse.json({
