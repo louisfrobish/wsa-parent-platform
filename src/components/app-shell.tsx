@@ -80,7 +80,7 @@ export function AppShell({ userLabel, children }: AppShellProps) {
             <Image src="/wsa/logo.png" alt="Wild Stallion Academy logo" width={88} height={88} priority />
             <div className="brand-copy">
               <p className="brand-subtitle">Wild Stallion Academy</p>
-              <strong>Command Center</strong>
+              <strong>TEST BUILD 123</strong>
             </div>
           </Link>
         </div>
