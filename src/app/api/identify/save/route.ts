@@ -4,6 +4,7 @@ import { completeDiscovery } from "@/lib/activity-completions";
 import { getDiscoveryLocationMeta } from "@/lib/discover/location";
 import { buildMushroomSafetyNote, mapDiscoverModeToCatalogCategory } from "@/lib/discoveries";
 import { discoverCategorySchema, identifyResponseSchema } from "@/lib/identify";
+import { getRankForCompletedAdventures } from "@/lib/students";
 import { createClient } from "@/lib/supabase/server";
 
 const saveIdentifySchema = z.object({
@@ -18,6 +19,15 @@ const saveIdentifySchema = z.object({
 });
 
 export async function POST(request: Request) {
+  let uploadedFilePath: string | null = null;
+  let createdDiscoveryId: string | null = null;
+  let createdPortfolioEntryId: string | null = null;
+  let createdCompletionId: string | null = null;
+  let rollbackStudentId: string | null = null;
+  let rollbackUserId: string | null = null;
+  let rollbackNewBadgeIds: string[] = [];
+  let rollbackNewAchievementIds: string[] = [];
+
   try {
     const supabase = await createClient();
     const {
@@ -63,6 +73,7 @@ export async function POST(request: Request) {
 
     const bytes = Buffer.from(await image.arrayBuffer());
     const filePath = `${user.id}/discoveries/${Date.now()}-${image.name}`;
+    uploadedFilePath = filePath;
 
     const { error: uploadError } = await supabase.storage.from("leaf-photos").upload(filePath, bytes, {
       contentType: image.type,
@@ -140,23 +151,17 @@ export async function POST(request: Request) {
       throw new Error(discoveryError.message);
     }
 
+    createdDiscoveryId = discovery.id;
+
     let completionResult: Awaited<ReturnType<typeof completeDiscovery>> | null = null;
     let entry: { id: string } | null = null;
 
     if (parsed.data.studentId) {
-      completionResult = await completeDiscovery({
-        supabase,
-        userId: user.id,
-        studentId: parsed.data.studentId,
-        title: `${result.possible_identification} discovery`,
-        notes: `Discovery category: ${catalogCategory}`
-      });
-
       const { data: portfolioEntry, error: portfolioError } = await supabase
         .from("portfolio_entries")
         .insert({
           student_id: parsed.data.studentId,
-          completion_id: completionResult.completion.id,
+          completion_id: null,
           title: `${result.possible_identification} discovery`,
           entry_type: "field_identification",
           summary: `${result.possible_identification}. ${result.wsa_observation_challenge}`,
@@ -185,6 +190,31 @@ export async function POST(request: Request) {
         throw new Error(portfolioError.message);
       }
 
+      createdPortfolioEntryId = portfolioEntry.id;
+
+      completionResult = await completeDiscovery({
+        supabase,
+        userId: user.id,
+        studentId: parsed.data.studentId,
+        title: `${result.possible_identification} discovery`,
+        notes: `Discovery category: ${catalogCategory}`
+      });
+
+      createdCompletionId = completionResult.completion.id;
+      rollbackStudentId = parsed.data.studentId;
+      rollbackUserId = user.id;
+      rollbackNewBadgeIds = completionResult.newBadges.map((badge) => badge.id);
+      rollbackNewAchievementIds = completionResult.newAchievements.map((achievement) => achievement.id);
+
+      const { error: portfolioLinkError } = await supabase
+        .from("portfolio_entries")
+        .update({ completion_id: completionResult.completion.id })
+        .eq("id", portfolioEntry.id);
+
+      if (portfolioLinkError) {
+        throw new Error(portfolioLinkError.message);
+      }
+
       entry = portfolioEntry;
     }
 
@@ -199,6 +229,66 @@ export async function POST(request: Request) {
       rankJustReached: completionResult?.rankJustReached ?? null
     });
   } catch (error) {
+    try {
+      const supabase = await createClient();
+
+      if (createdPortfolioEntryId) {
+        await supabase.from("portfolio_entries").delete().eq("id", createdPortfolioEntryId);
+      }
+
+      if (createdCompletionId) {
+        if (rollbackStudentId && rollbackNewBadgeIds.length) {
+          await supabase
+            .from("student_badges")
+            .delete()
+            .eq("student_id", rollbackStudentId)
+            .eq("source_completion_id", createdCompletionId)
+            .in("badge_id", rollbackNewBadgeIds);
+        }
+
+        if (rollbackStudentId && rollbackUserId && rollbackNewAchievementIds.length) {
+          await supabase
+            .from("student_achievements")
+            .delete()
+            .eq("student_id", rollbackStudentId)
+            .eq("user_id", rollbackUserId)
+            .in("achievement_id", rollbackNewAchievementIds);
+        }
+
+        await supabase.from("activity_completions").delete().eq("id", createdCompletionId);
+
+        if (rollbackStudentId && rollbackUserId) {
+          const { data: completionRows } = await supabase
+            .from("activity_completions")
+            .select("id, activity_type")
+            .eq("user_id", rollbackUserId)
+            .eq("student_id", rollbackStudentId);
+
+          const remainingAdventureCount =
+            completionRows?.filter((item) => item.activity_type !== "in_person_class").length ?? 0;
+
+          await supabase
+            .from("students")
+            .update({
+              completed_adventures_count: remainingAdventureCount,
+              current_rank: getRankForCompletedAdventures(remainingAdventureCount)
+            })
+            .eq("user_id", rollbackUserId)
+            .eq("id", rollbackStudentId);
+        }
+      }
+
+      if (createdDiscoveryId) {
+        await supabase.from("discoveries").delete().eq("id", createdDiscoveryId);
+      }
+
+      if (uploadedFilePath) {
+        await supabase.storage.from("leaf-photos").remove([uploadedFilePath]);
+      }
+    } catch {
+      // Best-effort rollback: preserve the original error response if cleanup also fails.
+    }
+
     const message = error instanceof Error ? error.message : "Unexpected server error.";
     return NextResponse.json({ error: message }, { status: 500 });
   }
